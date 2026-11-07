@@ -1,6 +1,6 @@
 import { auth } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
-import { sql } from '@/lib/db'
+import { createLead, sql } from '@/lib/db'
 import { getAgentReply } from '@/lib/groq'
 
 export async function POST(req: Request) {
@@ -33,7 +33,10 @@ export async function POST(req: Request) {
 
   let reply: string
   try {
-    reply = await getAgentReply(history)
+    reply = await getAgentReply(history, async (args) => {
+      const lead = await createLead(userId, args)
+      return { company: lead.company }
+    })
   } catch {
     return NextResponse.json({ error: 'Agent is temporarily unavailable' }, { status: 502 })
   }

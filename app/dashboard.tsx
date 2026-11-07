@@ -64,9 +64,9 @@ type ChatMessage = { from: 'user' | 'agent'; text: string }
 export default function Dashboard({
   displayName,
   initials,
-  leads,
+  leads: initialLeads,
   activities,
-  tasks,
+  tasks: initialTasks,
   metrics,
 }: {
   displayName: string
@@ -83,6 +83,80 @@ export default function Dashboard({
   const [sending, setSending] = useState(false)
   const [leadFilter, setLeadFilter] = useState('All leads')
   const [today, setToday] = useState('')
+  const [leads, setLeads] = useState(initialLeads)
+  const [tasks, setTasks] = useState(initialTasks)
+  const [showLeadModal, setShowLeadModal] = useState(false)
+  const [showTaskModal, setShowTaskModal] = useState(false)
+  const [leadForm, setLeadForm] = useState({ company: '', detail: '', contactName: '', score: '' })
+  const [taskForm, setTaskForm] = useState({ title: '', detail: '', actionLabel: 'Review' })
+  const [savingLead, setSavingLead] = useState(false)
+  const [savingTask, setSavingTask] = useState(false)
+  const [resolvingTaskId, setResolvingTaskId] = useState<string | null>(null)
+
+  async function submitLead() {
+    if (!leadForm.company.trim() || savingLead) return
+    setSavingLead(true)
+    try {
+      const res = await fetch('/api/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company: leadForm.company.trim(),
+          detail: leadForm.detail.trim() || undefined,
+          contactName: leadForm.contactName.trim() || undefined,
+          score: leadForm.score ? Number(leadForm.score) : undefined,
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setLeads((current) => [data.lead, ...current])
+        setLeadForm({ company: '', detail: '', contactName: '', score: '' })
+        setShowLeadModal(false)
+      }
+    } finally {
+      setSavingLead(false)
+    }
+  }
+
+  async function submitTask() {
+    if (!taskForm.title.trim() || savingTask) return
+    setSavingTask(true)
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: taskForm.title.trim(),
+          detail: taskForm.detail.trim() || undefined,
+          actionLabel: taskForm.actionLabel.trim() || undefined,
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setTasks((current) => [data.task, ...current])
+        setTaskForm({ title: '', detail: '', actionLabel: 'Review' })
+        setShowTaskModal(false)
+      }
+    } finally {
+      setSavingTask(false)
+    }
+  }
+
+  async function resolveTask(taskId: string, status: 'approved' | 'dismissed') {
+    setResolvingTaskId(taskId)
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      if (res.ok) {
+        setTasks((current) => current.filter((task) => task.id !== taskId))
+      }
+    } finally {
+      setResolvingTaskId(null)
+    }
+  }
 
   useEffect(() => {
     setToday(new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }))
@@ -119,6 +193,11 @@ export default function Dashboard({
       const data = await res.json()
       if (res.ok) {
         setMessages((current) => [...current, { from: 'agent', text: data.reply }])
+        // Aza may have added a lead via tool-calling — refresh the pipeline to show it.
+        fetch('/api/leads')
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => d?.leads && setLeads(d.leads))
+          .catch(() => {})
       } else {
         setMessages((current) => [...current, { from: 'agent', text: data.error || 'Something went wrong.' }])
       }
@@ -252,9 +331,20 @@ export default function Dashboard({
                 <h2 className="text-[26px] font-semibold tracking-[-0.045em] text-[#09162f] sm:text-[30px]">Your business, in motion.</h2>
                 <p className="mt-1 text-[13px] text-slate-500">Aza is working across your pipeline while you focus on the next move.</p>
               </div>
-              <button className="flex w-fit items-center gap-2 rounded-lg bg-cyan-400 px-3.5 py-2.5 text-[11px] font-semibold text-slate-950 shadow-[0_0_20px_rgba(34,211,238,.16)] transition hover:bg-cyan-300">
-                <Plus size={14} /> Assign a task
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowLeadModal(true)}
+                  className="flex w-fit items-center gap-2 rounded-lg border border-white/[0.09] px-3.5 py-2.5 text-[11px] font-semibold text-slate-700 transition hover:border-cyan-400/30 hover:text-cyan-200"
+                >
+                  <Plus size={14} /> Add lead
+                </button>
+                <button
+                  onClick={() => setShowTaskModal(true)}
+                  className="flex w-fit items-center gap-2 rounded-lg bg-cyan-400 px-3.5 py-2.5 text-[11px] font-semibold text-slate-950 shadow-[0_0_20px_rgba(34,211,238,.16)] transition hover:bg-cyan-300"
+                >
+                  <Plus size={14} /> Assign a task
+                </button>
+              </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Metric label="Pipeline score" value={String(pipelineValue)} change={leads.length ? `${leads.length} leads` : 'No leads yet'} icon={CircleDollarSign} />
@@ -344,9 +434,22 @@ export default function Dashboard({
                         <p className="truncate text-[12px] font-medium text-slate-700">{task.title}</p>
                         <p className="mt-0.5 truncate text-[10px] text-slate-500">{task.detail}</p>
                       </div>
-                      <button className="rounded-md border border-white/[0.1] px-2.5 py-1.5 text-[10px] font-medium text-slate-700 hover:border-cyan-400/30 hover:text-cyan-200">
-                        {task.action_label}
-                      </button>
+                      <div className="flex shrink-0 gap-1.5">
+                        <button
+                          onClick={() => resolveTask(task.id, 'approved')}
+                          disabled={resolvingTaskId === task.id}
+                          className="rounded-md border border-white/[0.1] px-2.5 py-1.5 text-[10px] font-medium text-slate-700 transition hover:border-cyan-400/30 hover:text-cyan-200 disabled:opacity-40"
+                        >
+                          {task.action_label}
+                        </button>
+                        <button
+                          onClick={() => resolveTask(task.id, 'dismissed')}
+                          disabled={resolvingTaskId === task.id}
+                          className="rounded-md border border-white/[0.1] px-2.5 py-1.5 text-[10px] font-medium text-slate-500 transition hover:border-rose-400/30 hover:text-rose-300 disabled:opacity-40"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -466,7 +569,117 @@ export default function Dashboard({
           </div>
         </section>
       </div>
+
+      {showLeadModal && (
+        <Modal onClose={() => setShowLeadModal(false)} title="Add lead">
+          <div className="flex flex-col gap-3">
+            <Field label="Company *">
+              <input
+                value={leadForm.company}
+                onChange={(e) => setLeadForm((f) => ({ ...f, company: e.target.value }))}
+                className="w-full rounded-md border border-white/[0.09] bg-white px-3 py-2 text-[12px] text-slate-700 outline-none"
+                placeholder="Acme Corp"
+              />
+            </Field>
+            <Field label="Detail">
+              <input
+                value={leadForm.detail}
+                onChange={(e) => setLeadForm((f) => ({ ...f, detail: e.target.value }))}
+                className="w-full rounded-md border border-white/[0.09] bg-white px-3 py-2 text-[12px] text-slate-700 outline-none"
+                placeholder="Why this is a fit"
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Contact name">
+                <input
+                  value={leadForm.contactName}
+                  onChange={(e) => setLeadForm((f) => ({ ...f, contactName: e.target.value }))}
+                  className="w-full rounded-md border border-white/[0.09] bg-white px-3 py-2 text-[12px] text-slate-700 outline-none"
+                />
+              </Field>
+              <Field label="Fit score (0-100)">
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={leadForm.score}
+                  onChange={(e) => setLeadForm((f) => ({ ...f, score: e.target.value }))}
+                  className="w-full rounded-md border border-white/[0.09] bg-white px-3 py-2 text-[12px] text-slate-700 outline-none"
+                />
+              </Field>
+            </div>
+            <button
+              onClick={submitLead}
+              disabled={!leadForm.company.trim() || savingLead}
+              className="mt-2 rounded-lg bg-cyan-400 px-3.5 py-2.5 text-[12px] font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:opacity-40"
+            >
+              {savingLead ? 'Adding…' : 'Add lead'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {showTaskModal && (
+        <Modal onClose={() => setShowTaskModal(false)} title="Assign a task">
+          <div className="flex flex-col gap-3">
+            <Field label="Title *">
+              <input
+                value={taskForm.title}
+                onChange={(e) => setTaskForm((f) => ({ ...f, title: e.target.value }))}
+                className="w-full rounded-md border border-white/[0.09] bg-white px-3 py-2 text-[12px] text-slate-700 outline-none"
+                placeholder="Review draft outreach to Acme Corp"
+              />
+            </Field>
+            <Field label="Detail">
+              <input
+                value={taskForm.detail}
+                onChange={(e) => setTaskForm((f) => ({ ...f, detail: e.target.value }))}
+                className="w-full rounded-md border border-white/[0.09] bg-white px-3 py-2 text-[12px] text-slate-700 outline-none"
+              />
+            </Field>
+            <Field label="Action button label">
+              <input
+                value={taskForm.actionLabel}
+                onChange={(e) => setTaskForm((f) => ({ ...f, actionLabel: e.target.value }))}
+                className="w-full rounded-md border border-white/[0.09] bg-white px-3 py-2 text-[12px] text-slate-700 outline-none"
+              />
+            </Field>
+            <button
+              onClick={submitTask}
+              disabled={!taskForm.title.trim() || savingTask}
+              className="mt-2 rounded-lg bg-cyan-400 px-3.5 py-2.5 text-[12px] font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:opacity-40"
+            >
+              {savingTask ? 'Adding…' : 'Add task'}
+            </button>
+          </div>
+        </Modal>
+      )}
     </main>
+  )
+}
+
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-[13px] font-semibold text-[#09162f]">{title}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700">
+            <X size={16} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] font-medium text-slate-500">{label}</span>
+      {children}
+    </label>
   )
 }
 
